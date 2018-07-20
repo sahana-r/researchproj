@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import numpy as np
 import os
 import sys
@@ -90,16 +92,14 @@ def img_inference(graph, img):
                 tensor_name = key + ':0'
                 if tensor_name in tensor_names:
                     tensor_dict[key] = tf.get_default_graph().get_tensor_by_name(tensor_name)
-            if 'detection_masks' in tensor_dict:
+            if 'detection_masks' in tensor_dict: #reshape detection boxes and detection masks — remove the first size 1 dimension
                 detection_boxes = tf.squeeze(tensor_dict['detection_boxes'], [0])
                 detection_masks = tf.squeeze(tensor_dict['detection_masks'], [0])
                 recast_num_detection = tf.cast(tensor_dict['num_detections'][0], tf.int32)
                 detection_boxes = tf.slice(detection_boxes, [0, 0], [recast_num_detection, -1])
                 detection_masks = tf.slice(detection_masks, [0, 0, 0], [recast_num_detection, -1, -1])
-                transformed_masks = util.mask_transform(detection_masks, detection_boxes, img.shape[0],img.shape[1])
-                #preserve those greater than the 0.5 threshold
-                transformed_masks = tf.cast(tf.greater(transformed_masks, 0.5), tf.uint8)
-                #add back the one dimensions we stripped out earlier
+                transformed_masks = util.mask_transform(detection_masks, detection_boxes, img.shape[0],img.shape[1]) #preserve those greater than the 0.5 threshold
+                transformed_masks = tf.cast(tf.greater(transformed_masks, 0.5), tf.uint8) #add back the one dimensions we stripped out earlier
                 tensor_dict['detection_masks']=tf.expand_dims(transformed_masks, 0)
             image_tensor = tf.get_default_graph().get_tensor_by_name('image_tensor:0')
             inference_dict = session.run(tensor_dict,{image_tensor:np.expand_dims(img, 0)})
@@ -115,7 +115,6 @@ def img_inference(graph, img):
 
 def dir_inference(dir_path, filename_arr):
     for filename in filename_arr:
-        print filename
         img = Image.open(dir_path + '/' + filename)
         img_arr = np.array(img.getdata()).reshape((img.size[1], img.size[0], 3)).astype(np.uint8)
         inf_dict = img_inference(detection_graph,img)
@@ -124,7 +123,12 @@ def dir_inference(dir_path, filename_arr):
 
 
 
-dir_inference(img_dir_path, img_arr)
+p = Process(target=dir_inference, args=(img_dir_path, img_arr))
+p.start()
+p.join()
+
+
+# dir_inference(img_dir_path, img_arr)
 d = util.get_dict_for_db()
 
 tuples=[]

@@ -1,6 +1,8 @@
 import psycopg2
 from config import config
 import csv
+
+#timing queries: run \timing before queries
  
 def connect():
     """ Connect to the PostgreSQL database server """
@@ -154,5 +156,10 @@ def create_topten_views():
         print(error)
     finally:
         if conn is not None:
-            conn.close()    
+            conn.close()
+
+#point lookup: select * from objects where label="dog" limit 1; (selects one row)
+#scan: select * from objects where [height > amt, label="dog", etc]; (selects a group of rows)
+#aggregation: select avg(score) from objects 
+#self-join: select * from objects as a, objects as b, where a.label = b.label    
 
