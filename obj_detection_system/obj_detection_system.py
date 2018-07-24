@@ -6,12 +6,13 @@ import sys
 import tarfile
 import tensorflow as tf
 import zipfile
+import datetime
 
 
 from collections import defaultdict
 from io import StringIO
 from PIL import Image
-from multiprocessing import Process
+from multiprocessing import Pool, Manager
 
 import string_int_label_map_pb2
 from google.protobuf import text_format
@@ -19,10 +20,33 @@ from google.protobuf import text_format
 import obj_detection_db as db
 import obj_detection_utils as util
 
+start_time = datetime.datetime.now()
+print "start time: " + str(start_time)
+
+if len(sys.argv) != 3:
+    raise Exception("Provide two arguments: first the directory of images, then what kind of loading.")
+
 arg = sys.argv[1]
 img_dir_path = arg
-
 img_arr = os.listdir(img_dir_path)
+
+para = False
+loading = sys.argv[2]
+if loading == "parallel":
+    para = True
+elif loading == "serial":
+    para = False
+else:
+    raise ValueError("Please specify whether parallel or serial loading.")
+
+
+if para:
+    manager = Manager()
+    db_dict = manager.dict()
+else:
+    db_dict = {}
+
+
 
 #try out different models
 MODEL_NAME = 'ssd_mobilenet_v1_coco_2017_11_17'
@@ -81,6 +105,7 @@ def img_inference(graph, img):
     inference for one image 
     """
     #move the next 2 lines just to the main function
+    
     with graph.as_default():
         with tf.Session() as session:
             all_operations = tf.get_default_graph().get_operations()
@@ -112,29 +137,53 @@ def img_inference(graph, img):
                 inference_dict['detection_masks'] = inference_dict['detection_masks'][0]
     return inference_dict
 
-
+def img_inference_parallel(img_filename):
+    img = Image.open(img_filename)
+    inf_dict = img_inference(detection_graph, img)
+    util.populate_dict_for_db(db_dict, img, inf_dict['detection_boxes'], inf_dict['detection_classes'], inf_dict['detection_scores'], category_index, img_filename)
 def dir_inference(dir_path, filename_arr):
     for filename in filename_arr:
         img = Image.open(dir_path + '/' + filename)
         img_arr = np.array(img.getdata()).reshape((img.size[1], img.size[0], 3)).astype(np.uint8)
         inf_dict = img_inference(detection_graph,img)
-        util.populate_dict_for_db(img, inf_dict['detection_boxes'], inf_dict['detection_classes'], inf_dict['detection_scores'], category_index, filename)
+        util.populate_dict_for_db(db_dict, img, inf_dict['detection_boxes'], inf_dict['detection_classes'], inf_dict['detection_scores'], category_index, filename)
+
+
+def dir_inf_parallel(filename_arr):
+    pool = Pool()
+    pool.map(img_inference_parallel, filename_arr)
+
+def filename_helper(dir_path, filename_arr):
+    filenames = []
+    for filename in filename_arr:
+        filenames.append(dir_path + '/' + filename)
+    return filenames
 
 
 
+if para:
+    filenames = filename_helper(img_dir_path, img_arr)
+    print "time up to parallel inf: " + str(datetime.datetime.now() - start_time)
+    dir_inf_parallel(filenames)
+    print "time after parallel inf: " + str(datetime.datetime.now() - start_time)
+else:
+    print "time up to serial inf: " + str(datetime.datetime.now() - start_time)
+    dir_inference(img_dir_path, img_arr)
+    print "time after serial inf: " + str(datetime.datetime.now() - start_time)
 
-p = Process(target=dir_inference, args=(img_dir_path, img_arr))
-p.start()
-p.join()
+
+#tuples = []
+# for img in para_dict.keys():
+#     obj_list = para_dict[img]
+#     for obj in obj_list:
+#         tuples.append(tuple([img]+obj))
 
 
-# dir_inference(img_dir_path, img_arr)
-d = util.get_dict_for_db()
-
+# print para_dict
 tuples=[]
 
-for img in d:
-    obj_list = d[img]
+for img in db_dict.keys():
+    obj_list = db_dict[img]
     for obj in obj_list:
         tuples.append(tuple([img]+obj))
 

@@ -14,11 +14,12 @@ directory input in arg must exist
 correct version of tf
 """
 
-dict_for_db = {}
+# dict_for_db = {}
 
-def populate_dict_for_db(image, boxes, classes, scores, category_index, image_id=None, min_score_thresh=.5, max_boxes=20):
+def populate_dict_for_db(dict_for_db, image, boxes, classes, scores, category_index, image_id=None, min_score_thresh=.5, max_boxes=20):
   """
   Inputs: 
+    dict--the dict to populate
     image--numpy array representation of the image
     boxes--numpy array representing N bounding boxes; each element is made up of (ymin, xmin, ymax, xmax)
     scores--numpy array of scores for each box
@@ -46,9 +47,11 @@ def populate_dict_for_db(image, boxes, classes, scores, category_index, image_id
           dict_for_db[image_id] = [] 
         if [box_height, box_width, box_xmin, box_ymin, this_label, scores[i]] not in dict_for_db[image_id]:
           dict_for_db[image_id].append([float(box_height), float(box_width), float(box_xmin), float(box_ymin), this_label, float(scores[i])])
+          dict_for_db[image_id] += [[float(box_height), float(box_width), float(box_xmin), float(box_ymin), this_label, float(scores[i])]]
+  # print dict_for_db
 
-def get_dict_for_db():
-  return dict_for_db
+# def get_dict_for_db():
+#   return dict_for_db
 
 #transform box mask to image size
 def mask_transform(box_masks, boxes, img_height, img_width):
