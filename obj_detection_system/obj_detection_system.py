@@ -1,5 +1,16 @@
 # -*- coding: utf-8 -*-
+"""
+Performs object detection upon a directory of images and outputs them to 
+a database. Can run serially or in parallel, according to the user's
+preference. The user calls the system script as follows:
+python2.7 obj_detection_system.py [image_directory_path] [serial/parallel]
 
+Upon being called, the system will record and print start time as well as 
+the start and end times for inference. It will also populate a database
+(user-provided; parameters in the configuration file should be changed)
+and create views on the table of the top 10 highest-scored images for
+each detected object.
+"""
 import numpy as np
 import os
 import sys
@@ -16,15 +27,16 @@ from multiprocessing import Pool, Manager
 
 import string_int_label_map_pb2
 from google.protobuf import text_format
-#import obj_detection_db and obj_detection_utils here
 import obj_detection_db as db
 import obj_detection_utils as util
+
 
 start_time = datetime.datetime.now()
 print "start time: " + str(start_time)
 
 if len(sys.argv) != 3:
-    raise Exception("Provide two arguments: first the directory of images, then what kind of loading.")
+    raise Exception("Provide two arguments: first the directory of images,"+ 
+        "then what kind of loading.")
 
 arg = sys.argv[1]
 img_dir_path = arg
@@ -39,23 +51,17 @@ elif loading == "serial":
 else:
     raise ValueError("Please specify whether parallel or serial loading.")
 
-
 if para:
     manager = Manager()
     db_dict = manager.dict()
 else:
     db_dict = {}
 
-
-
-#try out different models
 MODEL_NAME = 'ssd_mobilenet_v1_coco_2017_11_17'
 MODEL_FILE = MODEL_NAME + '.tar.gz'
 PATH_TO_CKPT = MODEL_NAME + '/frozen_inference_graph.pb'
 PATH_TO_LABELS = os.path.join('data', 'mscoco_label_map.pbtxt')
-
 NUM_CLASSES = 90
-
 
 detection_graph = tf.Graph()
 with detection_graph.as_default():
@@ -64,7 +70,6 @@ with detection_graph.as_default():
     serialized_graph = fid.read()
     od_graph_def.ParseFromString(serialized_graph)
     tf.import_graph_def(od_graph_def, name='')
-
 
 label_map = None
 with tf.gfile.GFile(PATH_TO_LABELS, 'r') as fid:
@@ -84,10 +89,11 @@ added = []
 if not label_map:
     label_id_offset = 1
     for class_id in range(NUM_CLASSES):
-        categories.append({'id': class_id + label_id_offset,'name': 'category_{}'.format(class_id + label_id_offset)})
+        categories.append({'id': class_id + label_id_offset,
+            'name': 'category_{}'.format(class_id + label_id_offset)})
 for item in label_map.item:
     if not 0 < item.id <= NUM_CLASSES:
-        logging.info('Ignore item %d since it falls outside of requested label range.', item.id)
+        logging.info('Item %d falls outside requested label range.', item.id)
         continue
     if item.HasField('display_name'):
         name = item.display_name
@@ -101,31 +107,41 @@ for cat in categories:
     category_index[cat['id']] = cat
 
 def img_inference(graph, img):
+    """Performs inference for one image 
+    Inputs:
+        graph--the graph object 
+        img--the image on which to perform inference
     """
-    inference for one image 
-    """
-    #move the next 2 lines just to the main function
-    
     with graph.as_default():
         with tf.Session() as session:
             all_operations = tf.get_default_graph().get_operations()
-            tensor_names = [output.name for operation in all_operations for output in operation.outputs]
+            tensor_names = [output.name for operation in all_operations for 
+                            output in operation.outputs]
             #mapping tensor name to tensor
             tensor_dict = {}
-            op_keys = ['num_detections', 'detection_boxes', 'detection_scores', 'detection_classes', 'detection_masks']
+            op_keys = ['num_detections', 'detection_boxes', 'detection_scores', 
+                        'detection_classes', 'detection_masks']
             for key in op_keys:
                 tensor_name = key + ':0'
                 if tensor_name in tensor_names:
                     tensor_dict[key] = tf.get_default_graph().get_tensor_by_name(tensor_name)
-            if 'detection_masks' in tensor_dict: #reshape detection boxes and detection masks — remove the first size 1 dimension
+            #reshape detection boxes and detection masks — remove the first size 1 dimension
+            if 'detection_masks' in tensor_dict: 
                 detection_boxes = tf.squeeze(tensor_dict['detection_boxes'], [0])
                 detection_masks = tf.squeeze(tensor_dict['detection_masks'], [0])
-                recast_num_detection = tf.cast(tensor_dict['num_detections'][0], tf.int32)
-                detection_boxes = tf.slice(detection_boxes, [0, 0], [recast_num_detection, -1])
-                detection_masks = tf.slice(detection_masks, [0, 0, 0], [recast_num_detection, -1, -1])
-                transformed_masks = util.mask_transform(detection_masks, detection_boxes, img.shape[0],img.shape[1]) #preserve those greater than the 0.5 threshold
-                transformed_masks = tf.cast(tf.greater(transformed_masks, 0.5), tf.uint8) #add back the one dimensions we stripped out earlier
+                recast_num_detection = tf.cast(tensor_dict['num_detections'][0],
+                                        tf.int32)
+                detection_boxes = tf.slice(detection_boxes, [0, 0], 
+                                    [recast_num_detection, -1])
+                detection_masks = tf.slice(detection_masks, [0, 0, 0], 
+                                    [recast_num_detection, -1, -1])
+                #preserve those greater than the 0.5 threshold
+                transformed_masks = util.mask_transform(detection_masks, 
+                                    detection_boxes, img.shape[0],img.shape[1]) 
+                transformed_masks = tf.cast(tf.greater(transformed_masks, 0.5), tf.uint8) 
+                #add back the one dimensions we stripped out earlier
                 tensor_dict['detection_masks']=tf.expand_dims(transformed_masks, 0)
+                
             image_tensor = tf.get_default_graph().get_tensor_by_name('image_tensor:0')
             inference_dict = session.run(tensor_dict,{image_tensor:np.expand_dims(img, 0)})
             # type conversions
@@ -137,23 +153,49 @@ def img_inference(graph, img):
                 inference_dict['detection_masks'] = inference_dict['detection_masks'][0]
     return inference_dict
 
+
 def img_inference_parallel(img_filename):
+    """Performs inference for one image in parallel. Differs in how inference dictionary
+        is populated in addition only taking one argument.
+        Inputs:
+            img_filename--the name of the image on which to perform inference.
+    """
     img = Image.open(img_filename)
     inf_dict = img_inference(detection_graph, img)
-    util.populate_dict_for_db(db_dict, img, inf_dict['detection_boxes'], inf_dict['detection_classes'], inf_dict['detection_scores'], category_index, img_filename)
+    util.populate_dict_for_db(db_dict, img, inf_dict['detection_boxes'], 
+                                inf_dict['detection_classes'], 
+                                inf_dict['detection_scores'], 
+                                category_index, img_filename)
+
+
 def dir_inference(dir_path, filename_arr):
+    """Performs inference on a directory of images.
+        Inputs:
+            dir_path--the path to the directory of images
+            filename_arr--an array of the names of the images within
+                            the directory
+    """
     for filename in filename_arr:
         img = Image.open(dir_path + '/' + filename)
         img_arr = np.array(img.getdata()).reshape((img.size[1], img.size[0], 3)).astype(np.uint8)
         inf_dict = img_inference(detection_graph,img)
-        util.populate_dict_for_db(db_dict, img, inf_dict['detection_boxes'], inf_dict['detection_classes'], inf_dict['detection_scores'], category_index, filename)
+        util.populate_dict_for_db(db_dict, img, inf_dict['detection_boxes'], 
+                                    inf_dict['detection_classes'], 
+                                    inf_dict['detection_scores'], 
+                                    category_index, filename)
 
 
 def dir_inf_parallel(filename_arr):
+    """Performs inference on a directory of images in parallel.
+        Defaults to four processes.
+        Inputs:
+            filename_arr--an array of the names of the images
+    """
     pool = Pool()
     pool.map(img_inference_parallel, filename_arr)
 
 def filename_helper(dir_path, filename_arr):
+    """Concatenates the path to the image directory and the image names."""
     filenames = []
     for filename in filename_arr:
         filenames.append(dir_path + '/' + filename)
@@ -171,17 +213,9 @@ else:
     dir_inference(img_dir_path, img_arr)
     print "time after serial inf: " + str(datetime.datetime.now() - start_time)
 
-
-#tuples = []
-# for img in para_dict.keys():
-#     obj_list = para_dict[img]
-#     for obj in obj_list:
-#         tuples.append(tuple([img]+obj))
-
-
-# print para_dict
 tuples=[]
 
+# print(db_dict)
 for img in db_dict.keys():
     obj_list = db_dict[img]
     for obj in obj_list:
@@ -189,14 +223,3 @@ for img in db_dict.keys():
 
 db.create_object_table_from_list(tuples)
 db.create_topten_views()
-
-
-"""
-run dir inference with python multiprocessing on several groups of images to cover whole directory
-
-populate_dict_for_db (in obj_detection_utils)
-
-load dict into db
-
-database utilities detailed in obj_detection_db
-"""
